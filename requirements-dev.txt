@@ -1,0 +1,3 @@
+# For running the test suite locally:  pip install -r requirements-dev.txt && pytest
+-r requirements.txt
+pytest==9.1.1
