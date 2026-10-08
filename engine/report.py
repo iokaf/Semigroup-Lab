@@ -158,10 +158,24 @@ def dynamics(spec, T=None, field_n=21):
     return compact(jsonable(out), 5)
 
 
-def backward(spec, n=101, T=60.0):
+def step_kind(m):
+    """Hyperbolic step for the petal cross-check: exact if available, else the numerical estimate."""
+    if m.kind != "parabolic":
+        return None
+    s = m.summary()
+    kind = (s.get("step") or {}).get("kind")
+    if kind is None:
+        try:
+            kind = orbits.nonelliptic_asymptotics(m)["step_numeric"]["kind"]
+        except Exception:  # noqa: BLE001 - the check is then reported as not applied
+            kind = None
+    return kind
+
+
+def backward(spec, n=101):
     m = get_model(spec)
     bpts = m.summary()["boundary_points"]
-    r = petals.backward_map(m, bpts, n=n, T=T)
+    r = petals.backward_map(m, bpts, n=n, step_kind=step_kind(m))
     return compact(jsonable(r), 5)
 
 
@@ -219,9 +233,7 @@ def point_orbits(spec, z0, T=None):
         fwd["dist_tau"] = np.abs(zf - m.tau)
     else:
         fwd["k_to_tau"] = orbits.k_D(m.tau, zf)
-    bwd = orbits.backward_orbit(m, z0, max(T, 60.0), bpts)
-    code_names = petals.CODES
-    bwd["code_name"] = code_names.get(bwd["code"], "?")
+    bwd = petals.backward_orbit(m, z0, bpts)
     # thin out long paths
     for d in (fwd, bwd):
         n = len(d["t"])

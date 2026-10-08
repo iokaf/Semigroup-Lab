@@ -5,7 +5,8 @@
 * Berkson–Porta: Re p >= 0 for p = G / ((z - tau)(conj(tau) z - 1)).
 * Holomorphy: finite values and a Cauchy–Riemann consistency test (catches branch cuts
   of principal-branch functions inside D).
-* Semigroup law: |phi_{t+s} - phi_t ∘ phi_s| (closed form, or the numerical flow).
+* Semigroup law: |phi_{t+s} - phi_t ∘ phi_s| (closed form, or the numerical flow), at times measured
+  in units of the flow's own speed.
 Sampling gives evidence, not proof: values are reported with the location of the worst case.
 """
 from __future__ import annotations
@@ -161,10 +162,22 @@ def holomorphy(model):
     return out
 
 
+def flow_time_unit(model):
+    """1/κ with κ the median speed |G| on a sample of the disc: replacing G by cG divides it by c."""
+    r = np.array([0.3, 0.5, 0.7, 0.85])
+    a = np.linspace(0, 2 * np.pi, 24, endpoint=False) + 0.05
+    v = np.abs(model.G((r[:, None] * np.exp(1j * a)[None, :]).ravel()))
+    v = v[np.isfinite(v) & (v > 0)]
+    return 1.0 / float(np.median(v)) if v.size else 1.0
+
+
 def semigroup_law(model):
     rng = np.random.default_rng(3)
     Z = 0.95 * np.sqrt(rng.random(40)) * np.exp(2j * np.pi * rng.random(40))
-    s_, t_ = 0.37, 0.81
+    # times in units of the flow's own speed, so that fast flows (G multiplied by a large constant)
+    # have not already carried every sample point to τ before the comparison is made
+    unit = flow_time_unit(model)
+    s_, t_ = 0.37 * unit, 0.81 * unit
     out = {}
     num = integrate(model.G, Z, [s_, t_, s_ + t_], rtol=1e-11, atol=1e-14, margin=disk_margin,
                     eps_levels=(1e-15,), margin_rate=disk_margin_rate)

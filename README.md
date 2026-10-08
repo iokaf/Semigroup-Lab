@@ -8,7 +8,7 @@ reports:
 
 * the Denjoy–Wolff point and the spectral value;
 * the type (elliptic, hyperbolic or parabolic) and the hyperbolic step;
-* boundary fixed points, the backward invariant set and petals;
+* boundary fixed points, the backward invariant set and petals, cross-checked against the theorems;
 * the Koenigs domain, and speeds and rates of convergence;
 * interactive pictures.
 
@@ -83,9 +83,10 @@ Once it is live, you can add a badge to this README:
 ## Using the app
 
 * **Input** (sidebar): choose Generator, Berkson–Porta or Semigroup mode, type the expression and press
-  **Analyse**. Or pick one of the 14 library examples, which all have known answers.
-* **Parameters** (sidebar): the picture horizon, the resolution and horizon of the backward map, the
-  asymptotics horizon, and the base point z₀ for the speeds.
+  **Analyse**. Or pick one of the 15 library examples, which all have known answers.
+* **Parameters** (sidebar): the picture horizon, the resolution of the backward map, the asymptotics
+  horizon, and the base point z₀ for the speeds. The backward map needs no horizon: every orbit is
+  followed until it escapes or provably converges.
 * **Disc:** toggle the layers:
   * flow lines and the vector field;
   * the phase portrait of G;
@@ -127,9 +128,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-There are 62 tests, taking about 40 s:
+There are 78 tests, taking about 80 s:
 
 * the engine against library examples with known answers;
+* petals against exact answers (two half-disc petals, the Koebe slit), under rescaling of time, and
+  against an independent reference implementation (`tests/reference_petals.py`, SciPy DOP853 with
+  event location);
 * both pages end to end with Streamlit's AppTest;
 * consistency between the documentation and the code;
 * the protections described under hosting notes;

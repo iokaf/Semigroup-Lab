@@ -20,11 +20,11 @@ Everything runs inside the Streamlit process, in five steps. The summary comes f
 |---|---|---|
 | Summary | generator, τ, λ, type, group test, exact step test, boundary fixed points, all checks | 0.1–0.4 s |
 | Dynamics | vector field, phase portrait, flow lines, $\varphi_t(\mathbb D)$, half-plane picture | 0.5 s |
-| Backward map | backward integration of a grid of points, escape times, petals | 0.2–1.5 s |
+| Backward map | backward integration of a grid of points until each is classified, escape times, petals, theorem checks | 0.1–1 s |
 | Koenigs | Koenigs function on a polar grid, orbits in $\Omega$, shape of $\Omega$ | 0.1–1.2 s |
 | Asymptotics | long-time orbit, speeds, rates, slope, numerical hyperbolic step | 0.2–0.6 s |
 
-Each step is cached for its input and its own parameters, and the model built from your input (parsed generator, τ, λ, the conjugated charts) is cached as well. Switching picture layers, moving the time slider, changing tabs or inspecting points therefore never repeats an analysis, and changing, say, the backward horizon recomputes only the backward map.
+Each step is cached for its input and its own parameters, and the model built from your input (parsed generator, τ, λ, the conjugated charts) is cached as well. Switching picture layers, moving the time slider, changing tabs or inspecting points therefore never repeats an analysis, and changing, say, the backward map's resolution recomputes only the backward map.
 
 <!-- section: reliability -->
 
@@ -103,7 +103,7 @@ Three tests. First, G must be finite at 6000 random points with $|z| < 1-10^{-4}
 
 ### Semigroup law
 
-For 40 random points with $|z| < 0.95$ and $s = 0.37$, $t = 0.81$, the numerical flow is checked for $|\varphi_{t+s}(z) - \varphi_t(\varphi_s(z))|$ (pass below $10^{-6}$; typical values are $10^{-13}$). In semigroup mode the closed form is also checked: its own semigroup law (below $10^{-8}$), its distance to the flow of G (below $10^{-6}$), and $\max|\varphi_t| \le 1$ at t = 0.1, 1 and 5.
+For 40 random points with $|z| < 0.95$ and $s = 0.37/\kappa$, $t = 0.81/\kappa$, where κ is the median of |G| on a fixed sample of D (so the test does not depend on how fast the flow runs; with fixed times, a fast flow would already have carried every sample point to τ), the numerical flow is checked for $|\varphi_{t+s}(z) - \varphi_t(\varphi_s(z))|$ (pass below $10^{-6}$; typical values are $10^{-13}$). In semigroup mode the closed form is also checked: its own semigroup law (below $10^{-8}$), its distance to the flow of G (below $10^{-6}$), and $\max|\varphi_t| \le 1$ at t = 0.1, 1 and 5.
 
 <!-- code: semigroup_law -->
 
@@ -250,7 +250,7 @@ All orbits come from one integrator: an adaptive Dormand–Prince 5(4) Runge–K
 - **Error control:** each step is accepted when $|\text{err}| \le \text{atol} + \text{rtol}\cdot|y|$. The tolerances are rtol $10^{-8}$ to $10^{-11}$ depending on the task (listed in each section).
 - **Output times:** steps are shortened to land exactly on requested times; there is no interpolation.
 - **Boundary handling:** a margin function ($1-|z|$ in the disc) is monitored and the first time it drops below each threshold is recorded by linear interpolation within the step. Steps are additionally capped so that the radial approach to the circle is at most half the current margin. Only the radial velocity counts, so orbits sliding along the circle are not slowed down.
-- **Budgets:** each point has a step budget (5000–8000 steps for grids, up to 200,000 for single long orbits). A point that exhausts it, or whose step size underflows, is reported as a numerical failure, never as a result.
+- **Budgets:** each point has a step budget (5000–8000 steps for picture grids, 12,000 for the backward map, up to 200,000 for single long orbits). A point that exhausts it, or whose step size underflows, is reported as a numerical failure, never as a result.
 
 <!-- code: integrate -->
 
@@ -263,33 +263,47 @@ All orbits come from one integrator: an adaptive Dormand–Prince 5(4) Runge–K
 A point z lies in $\varphi_t(\mathbb D)$ exactly when the backward equation $\dot\zeta = -G(\zeta)$, $\zeta(0)=z$, has a solution in D up to time t (each $\varphi_t$ is univalent). The **backward invariant set** is $W = \bigcap_{t\ge0}\varphi_t(\mathbb D)$, the set of points with a backward orbit defined for all time. The connected components of its interior are the **petals**, on which every $\varphi_t$ acts as an automorphism.
 
 - A **hyperbolic petal** has backward orbits converging to a repelling boundary fixed point, its α-point. Each repelling boundary fixed point is the α-point of exactly one hyperbolic petal.
-- A **parabolic petal** has backward orbits converging to τ itself. It exists exactly for parabolic semigroups of positive hyperbolic step.
+- A **parabolic petal** has backward orbits converging to τ itself. It exists exactly for parabolic semigroups of positive hyperbolic step. Backward orbits of hyperbolic semigroups never converge to τ.
+- W depends only on the orbits, not on how fast they are traversed: replacing G by cG with c > 0 leaves W and every petal unchanged. The method below respects this exactly.
 
 ### What the tool does
 
-Every point of an n × n grid on $[-1,1]^2$ with $|z| < 1-1/n$ (default n = 101) is integrated backwards up to time T (default 60) with rtol $10^{-8}$. For each point the tool records the times $t_1, t_2$ at which $1-|\zeta|$ first drops below $10^{-5}$ and $10^{-9}$. Their difference separates the two ways of reaching the circle:
+Every point of an n × n grid on $[-1,1]^2$ with $|z| < 1 - 10^{-7}$ (default n = 101), so right up to the circle, has its backward orbit followed until it is classified. Non-elliptic semigroups are integrated in the half-plane chart $w = (\tau+z)/(\tau-z)$, where τ is at infinity and nothing near it is lost to rounding; elliptic ones in the disc. The integrator is the same Dormand–Prince 5(4) method, with rtol $10^{-9}$, steps that never cross the boundary or jump over a capture ball, and every decision geometric:
 
-$$
-\begin{aligned} t_2 - t_1 &\approx \frac{\ln 10^4}{\beta} && \text{near a repelling point with value } \beta,\\ t_2 - t_1 &\approx \frac{10^{-5}}{v_\perp} \approx 0 && \text{for an exit crossing the circle with normal speed } v_\perp. \end{aligned}
-$$
-
-| Grid point classified as | Rule |
+| Outcome | Rule |
 |---|---|
-| escapes in finite time | reaches $1-\vert\zeta\vert = 10^{-9}$ with $t_2 - t_1 \le 0.05$; also when it runs into a pole of G on the circle (the step size collapses there, \|G\| > 10⁶). Its escape time $T^* = t_2$ is what the escape-time layer shows: the point lies in $\varphi_t(\mathbb D)$ exactly for $t < T^*$. |
-| converges to a repelling boundary fixed point | $t_2 - t_1 > 0.05$ and the landing point is within 0.02 of a known boundary fixed point (or \|G\| < 10⁻⁴ there). The rate is estimated as $\beta \approx \ln 10^4/(t_2-t_1)$. |
-| converges to τ (parabolic petal) | non-elliptic, still inside D at time T, and within 0.05 of τ with $1-\vert\zeta\vert < 10^{-2}$; or a slow approach landing at τ. |
-| survives up to T (undecided) | still inside D at time T, elsewhere. |
-| numerical failure | step budget (6000) exhausted or step size underflow away from a pole. |
+| escapes (not in W) | the orbit reaches the boundary: the margin (Re w, or $1-\vert z\vert$) becomes ≤ 0, or away from every capture ball drops below $10^{-12}(1+\vert w\vert)$, or the step size collapses next to the boundary. The last two catch orbits that hit ∂D in finite time while the field blows up or loses smoothness there, such as a pole of G or a square-root point. The escape time $T^*$ (the point lies in $\varphi_t(\mathbb D)$ exactly for $t < T^*$) is what the escape-time layer shows. |
+| petal of σ | the orbit enters the **capture ball** of a repelling point σ: $\vert w - w_\sigma\vert < r_\sigma$ with margin at least $0.01\,\vert w-w_\sigma\vert$, or $\vert w - w_\sigma\vert < 10^{-9}$. |
+| parabolic petal | parabolic semigroups only: the orbit runs off to τ with Re w tending to a positive limit. |
+| undecided | none of the above within the horizon; never guessed. |
 
-Petals are the 8-connected components of the points with an asymptotic backward orbit, with at least 3 grid cells. The α-point is the most frequent landing angle (rounded to 0.01π), snapped to a listed boundary fixed point within 0.03. A component is a parabolic petal if most of its points converge to τ. The β estimate shown for a petal is the median over its points and should match the repelling spectral value of its α-point; in the library examples it agrees to 3–4 digits.
+**Why the capture ball proves convergence.** Near $w_\sigma$ the backward field is $-\beta(w-w_\sigma) + O(c\,\vert w-w_\sigma\vert^2)$ with β = β(σ) > 0 real: a contraction towards $w_\sigma$, which by itself keeps the half-plane (or, by convexity, the disc) invariant. Along such an orbit the margin can shrink by at most $c r^2/\beta$, where r is the distance to $w_\sigma$ when the ball is entered. The radius $r_\sigma = \min(10^{-2}, 0.005\,\beta/c)$ (in units of $\max(1, \vert w_\sigma\vert)$) makes that at most $0.005\,r$, less than the required margin $0.01\,r$. The constant c is measured by sampling the field around $w_\sigma$. Orbits creeping along the boundary inside the ball are integrated further and accepted once they are within $10^{-9}$, where the residual uncertainty is below $10^{-18}$.
+
+**Parabolic petal.** If $\operatorname{Re} w(s) = x_\infty + a/s + \dots$, Richardson extrapolation from the horizons s, 2s, 4s gives $x_\infty \approx 2x(4s) - x(2s)$. The orbit is put in the parabolic petal when this limit is positive, at least a quarter of the current Re w, and consistent with the estimate from s and 2s.
+
+**Horizon.** Orbits are followed in rounds with horizons $T_k = T_0 2^k$, k = 0, …, 9, until all are classified. Here $T_0 = 20/\kappa$, and κ, the median of $\vert F\vert/(1+\vert w\vert)$ on a fixed sample of D, is the flow's own unit of speed. Multiplying G by c multiplies κ by c, so the classification is the same for every c.
+
+**Petals** are grouped by their α-point, the point the backward orbits converge to, not by which pixels touch. Two petals separated by a curve thinner than the grid therefore stay apart. Areas are shares of the grid cells that lie in D. For each petal the rate $\ln(r_1/r_2)/\Delta s$ at which its orbits cross from $10\,r_\sigma$ into the capture ball is reported as an independent estimate of β(σ).
+
+**Checks against the theory**, shown under the petal table, each marked ✓ or ⚠:
+
+- every repelling point has a non-empty petal; an empty one means the petal is thinner than the grid;
+- every petal is connected at this resolution;
+- the measured rate into σ agrees with β(σ) to within 10%;
+- for parabolic semigroups, a parabolic petal is present exactly when the hyperbolic step is positive (exact step if available, otherwise its numerical estimate);
+- fewer than 1% of the grid points are unclassified.
 
 ### What to expect
 
-The result is an *outer approximation* of W at resolution $2/(n-1)$. Undecided survivors are not counted as W, so a larger T sharpens the picture. Petal edges are uncertain by one grid cell, and thin pieces of D \ W (such as the slit (−1, 0] in the Koebe example) show up only where grid points happen to lie on them. Clicking a point in the disc (or typing it in the point inspector) runs the same classification for that single point with rtol $10^{-10}$ and also fits β from the slope of $\log(1-|\zeta(t)|)$.
+On the library examples and on dedicated stress cases (two petals split by a slanted diameter, a hyperbolic semigroup with λ = 0.025, the petal example with G multiplied by 1/100 and by 100), the classification agrees point by point with an independent reference computation (SciPy's DOP853 with event location, rtol $10^{-11}$). Petal edges are still resolved only to one grid cell, and thin pieces of D \ W, such as the slit (−1, 0] in the Koebe example, appear only where grid points lie on them. Clicking a point in the disc (or typing it in the point inspector) runs the same classification for that single point with rtol $10^{-10}$ and shows its rate into σ next to β(σ).
 
 <!-- code: classify_backward -->
 
+<!-- code: capture_radius -->
+
 <!-- code: backward_map -->
+
+<!-- code: petal_checks -->
 
 <!-- code: backward_orbit -->
 
@@ -393,7 +407,7 @@ The time series are accurate; the fitted constants describe the chosen window on
 - Anything that depends on behaviour at ∂D or as t → ∞ is sampled. Validity, petals, the shape of Ω, the numerical step and all fits are evidence, not proof.
 - A tiny positive λ cannot be told apart from λ = 0 numerically; only the exact engine decides it.
 - For non-rational G, boundary fixed points are found only where |G| has a detectable minimum on the circle.
-- Backward orbits that slide tangentially along the circle can exhaust the step budget and appear as numerical failures.
+- Petal edges are resolved to one grid cell. A petal thinner than the grid spacing can be missed; the theorem checks then report a repelling point without a petal.
 - Principal branches are used for all multivalued functions. If the branch you mean differs, rewrite the expression so that the principal branch is the right one; the holomorphy check reports cuts inside D.
 
 <!-- section: references -->

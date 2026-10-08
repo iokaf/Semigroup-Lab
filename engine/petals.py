@@ -1,24 +1,36 @@
-"""Backward invariant set W = ∩ phi_t(D) and petals (connected components of int W).
+"""Backward invariant set W = ∩ φ_t(D) and its petals.
 
-z ∈ phi_t(D)  <=>  the backward flow  dz/ds = -G(z)  from z exists up to time t.
-Each grid point is integrated backwards up to T and classified (see
-``orbits.classify_backward``):  points that hit the circle in finite time are
-*not* in W (their escape time T* is recorded, so {T* > t} = phi_t(D) ∩ grid);
-points whose orbits approach a boundary fixed point asymptotically (detected
-from the time between the crossings 1-|z| = 1e-5 and 1e-9) belong to a petal.
-The output is an *outer approximation* of W: survivors up to T are undecided.
+Every grid point is classified by ``backward.classify`` (escape, petal of a repelling point σ,
+parabolic petal, undecided); see that module for the method. Then:
+
+* Petals are grouped by their α-point, the point the backward orbits converge to, not by which
+  pixels touch: every repelling boundary fixed point is the α-point of exactly one hyperbolic
+  petal, and the parabolic petal (at most one) consists of the backward orbits converging to τ.
+  Two petals separated by a curve thinner than the grid therefore stay apart.
+* The grid reaches the unit circle (cells with |z| < 1 − 10⁻⁷), and areas are shares of the grid
+  cells that lie in D, so they are not biased by an unsampled ring.
+* The outcome is cross-checked against theorems, and every failed check is reported.
 """
 from __future__ import annotations
 
 import numpy as np
 from scipy import ndimage
 
-from .integrate import disk_margin, disk_margin_rate, integrate
-from .orbits import classify_backward
+from . import backward as B
 
-CODES = {0: "escapes in finite time", 1: "converges to a repelling boundary fixed point",
-         2: "converges to tau (parabolic petal)", 3: "survives up to T (undecided)",
-         4: "Denjoy–Wolff point (fixed)", 5: "numerical failure"}
+CODES = {
+    B.ESCAPE: "escapes in finite time",
+    "petal": "converges to a repelling boundary fixed point",
+    B.TAU: "converges to τ (parabolic petal)",
+    B.UNDECIDED: "undecided",
+    B.FIXED: "Denjoy–Wolff point (fixed)",
+    B.IN_W: "in W (group of rotations)",
+    B.FAILED: "numerical failure",
+}
+
+
+def code_name(label: int) -> str:
+    return CODES["petal"] if label >= 0 else CODES.get(label, "?")
 
 
 def _fmt_c(c, tol=1e-9):
@@ -30,97 +42,175 @@ def _fmt_c(c, tol=1e-9):
     return f"{re_:.6g} {'+' if im_ > 0 else '-'} {abs(im_):.6g}i"
 
 
-def backward_map(model, boundary_points, n=101, T=60.0, rtol=1e-8):
+def backward_map(model, boundary_points, n=101, step_kind=None):
+    """Classify a grid of points; return labels, petals, escape times and theorem checks."""
     n = int(np.clip(n, 21, 201))
     g = np.linspace(-1, 1, n)
     X, Y = np.meshgrid(g, g)
     Z = X + 1j * Y
-    inside = np.abs(Z) < 1 - 1.0 / n
+    inside = np.abs(Z) < 1 - 1e-7
     pts = Z[inside]
-    f = lambda zz: -model.G(zz)  # noqa: E731
-    res = integrate(f, pts, [T], margin=disk_margin, eps_levels=(1e-5, 1e-9), rtol=rtol,
-                    atol=1e-13, max_iter=30000, max_steps_per_point=6000,
-                    margin_rate=disk_margin_rate)
-    codes = np.full(pts.shape, 5, dtype=int)
+    chart = B.Chart(model, boundary_points)
+    lab = np.full(pts.shape, B.UNDECIDED, dtype=int)
     exit_t = np.full(pts.shape, np.nan)
-    landing = np.full(pts.shape, np.nan + 1j * np.nan)
     beta_est = np.full(pts.shape, np.nan)
-    is_tau = (np.abs(pts - model.tau) < 1e-12) if not model.tau_on_boundary else np.zeros(pts.size, bool)
-    for i in range(pts.size):
-        if is_tau[i]:
-            codes[i] = 4
-            continue
-        code, info = classify_backward(model, res.last[i], res.crossings[:, i], bool(res.alive[i]),
-                                       res.last[i], bool(res.stalled[i]), boundary_points, T,
-                                       t_stop=float(res.exit_time[i]))
-        codes[i] = code
-        if "exit_time" in info:
-            exit_t[i] = info["exit_time"]
-        if "landing" in info:
-            landing[i] = info["landing"]
-        if "beta_est" in info:
-            beta_est[i] = info["beta_est"]
-    code_grid = np.full(Z.shape, -1, dtype=int)
-    code_grid[inside] = codes
+    t_max = 0.0
+    if model.kind == "elliptic" and model.group:
+        lab[:] = B.IN_W                       # rotations: every point has a backward orbit
+    else:
+        is_tau = (np.abs(pts - model.tau) < 1e-12) if model.kind == "elliptic" else np.zeros(pts.size, bool)
+        res = B.classify(chart, pts[~is_tau], parabolic_allowed=(model.kind == "parabolic"))
+        lab[~is_tau] = res["label"]
+        exit_t[~is_tau] = res["exit_time"]
+        beta_est[~is_tau] = res["beta_est"]
+        lab[is_tau] = B.FIXED
+        t_max = res["t_max"]
+    labels = np.full(Z.shape, -9, dtype=int)
+    labels[inside] = lab
     exit_grid = np.full(Z.shape, np.nan)
     exit_grid[inside] = exit_t
-    land_grid = np.full(Z.shape, np.nan + 1j * np.nan)
-    land_grid[inside] = landing
+    n_in = int(inside.sum())
 
-    # petals = connected components of the points with asymptotic backward orbits
-    petal_mask = (code_grid == 1) | (code_grid == 2)
-    if model.group:
-        petal_mask |= code_grid == 3
-    labels, nlab = ndimage.label(petal_mask, structure=np.ones((3, 3)))
-    cell_area = (g[1] - g[0]) ** 2
     petals = []
-    for lab in range(1, nlab + 1):
-        sel = labels == lab
-        cnt = int(sel.sum())
-        if cnt < 3:
-            labels[sel] = 0
-            continue
-        kinds = code_grid[sel]
-        lands = land_grid[sel]
-        lands = lands[np.isfinite(lands)]
-        target = None
-        if lands.size:
-            ang = np.round(np.angle(lands) / np.pi, 2)
-            vals, counts = np.unique(ang, return_counts=True)
-            a = vals[np.argmax(counts)] * np.pi
-            target = complex(np.exp(1j * a))
-            for bp in boundary_points:
-                if abs(bp["sigma"] - target) < 3e-2:
-                    target = bp["sigma"]
-                    break
-        frac_parabolic = float(np.mean(kinds == 2))
-        be = beta_est[labels[inside] == lab]
+    for k, (sig, beta) in enumerate(zip(chart.sigmas, chart.betas)):
+        cells = labels == k
+        cnt = int(cells.sum())
+        comps = _components(cells)
+        be = beta_est[lab == k]
         be = be[np.isfinite(be)]
-        petals.append({
-            "label": lab,
-            "kind": "parabolic petal" if frac_parabolic > 0.5 else "hyperbolic petal",
-            "alpha_point": target,
-            "area_fraction": float(cnt * cell_area / np.pi),
-            "pixels": cnt,
-            "beta_estimate_median": float(np.median(be)) if be.size else None,
-        })
-    counts = {CODES[c]: int((codes == c).sum()) for c in CODES}
-    summary = []
+        petals.append({"key": k, "kind": "hyperbolic petal", "alpha_point": sig, "beta": beta,
+                       "cells": cnt, "area_fraction": cnt / n_in, "components": comps,
+                       "beta_estimate_median": float(np.median(be)) if be.size else None})
+    cells = labels == B.TAU
+    if cells.any():
+        petals.append({"key": "tau", "kind": "parabolic petal", "alpha_point": model.tau, "beta": None,
+                       "cells": int(cells.sum()), "area_fraction": float(cells.sum()) / n_in,
+                       "components": _components(cells), "beta_estimate_median": None})
+    if model.kind == "elliptic" and model.group:
+        petals = [{"key": "W", "kind": "whole disc (group of rotations)", "alpha_point": None, "beta": None,
+                   "cells": n_in, "area_fraction": 1.0, "components": 1, "beta_estimate_median": None}]
+    counts = {}
+    for l in np.unique(lab):
+        name = code_name(int(l))
+        counts[name] = counts.get(name, 0) + int((lab == l).sum())
+    checks = petal_checks(model, petals, counts, n_in, step_kind)
+    summary = _summary(model, petals)
+    return {"n": n, "grid": g, "labels": labels, "exit_time": exit_grid, "petals": petals,
+            "counts": counts, "checks": checks, "summary": summary, "t_max": t_max,
+            "time_unit": 20.0 / chart.typical_speed(),
+            "capture_radii": chart.r_cap}
+
+
+def _components(cells):
+    labelled, num = ndimage.label(cells, structure=np.ones((3, 3)))
+    if num == 0:
+        return 0
+    sizes = ndimage.sum(cells, labelled, range(1, num + 1))
+    return int((np.asarray(sizes) >= 3).sum())
+
+
+def _summary(model, petals):
+    if model.kind == "elliptic" and model.group:
+        return ["Group of rotations: every point has a backward orbit, W = D."]
+    real = [p for p in petals if p["cells"] > 0]
+    if not real:
+        return ["No petals: numerically W has empty interior."]
+    out = []
+    for p in real:
+        ap = _fmt_c(p["alpha_point"]) if p["alpha_point"] is not None else "undetermined"
+        out.append(f"A {p['kind']} with α-point {ap}, covering about {100 * p['area_fraction']:.1f}% of D.")
     if model.group:
-        summary.append("Group of automorphisms: every point has a backward orbit (W = D).")
-    elif not petals:
-        if counts[CODES[3]] == 0:
-            summary.append("No petals found: numerically W has empty interior.")
+        out.insert(0, "Group of automorphisms: every point has a backward orbit, W = D.")
+    return out
+
+
+def petal_checks(model, petals, counts, n_in, step_kind=None):
+    """Compare the computed petals with what the theory requires. Each entry: {ok, text}."""
+    checks = []
+    if model.kind == "elliptic" and model.group:
+        return [{"ok": True, "text": "Group of rotations: W = D, as it must be."}]
+    for p in petals:
+        if p["kind"] != "hyperbolic petal":
+            continue
+        s = _fmt_c(p["alpha_point"])
+        if p["cells"] == 0:
+            checks.append({"ok": False, "text": (
+                f"No grid point converged to the repelling point σ = {s}, yet every repelling point is "
+                "the α-point of exactly one petal: that petal is thinner than the grid here. "
+                "Raise the resolution.")})
+            continue
+        checks.append({"ok": True, "text": f"The repelling point σ = {s} has its petal, as it must."})
+        if p["components"] > 1:
+            checks.append({"ok": False, "text": (
+                f"The petal of σ = {s} appears in {p['components']} pieces. Petals are connected, so the "
+                "pieces are joined by strips thinner than the grid.")})
+        be = p["beta_estimate_median"]
+        if be is not None and p["beta"]:
+            rel = abs(be - p["beta"]) / p["beta"]
+            checks.append({"ok": rel < 0.1, "text": (
+                f"Rate of the backward orbits into σ = {s}: {be:.5g}, against β(σ) = {p['beta']:.5g} "
+                f"({100 * rel:.2g}% apart){'' if rel < 0.1 else '; expected to agree'}.")})
+    has_tau = any(p["kind"] == "parabolic petal" and p["cells"] for p in petals)
+    if model.kind == "parabolic":
+        if step_kind == "positive":
+            checks.append({"ok": has_tau, "text": (
+                "Positive hyperbolic step and a parabolic petal was found, as the theory requires."
+                if has_tau else
+                "Positive hyperbolic step, so a parabolic petal must exist, but none was found on the grid.")})
+        elif step_kind == "zero":
+            checks.append({"ok": not has_tau, "text": (
+                "Zero hyperbolic step and no parabolic petal, as the theory requires." if not has_tau else
+                "A parabolic petal was found although the step is zero; this contradicts the theory.")})
         else:
-            summary.append("No petals identified; some points survive to T (increase T).")
+            checks.append({"ok": True, "text": (
+                "Hyperbolic step undecided, so the parabolic-petal check (a parabolic petal exists exactly "
+                "for positive step) was not applied.")})
+    bad = counts.get(CODES[B.UNDECIDED], 0) + counts.get(CODES[B.FAILED], 0)
+    if bad:
+        share = bad / n_in
+        checks.append({"ok": share < 0.01, "text": (
+            f"{bad} grid points ({100 * share:.2g}%) could not be classified "
+            "(undecided or numerical failure).")})
+    return checks
+
+
+def backward_orbit(model, z0, boundary_points):
+    """Backward orbit of one point with its classification (for the point inspector)."""
+    chart = B.Chart(model, boundary_points)
+    if model.kind == "elliptic" and model.group:
+        from .integrate import disk_margin, integrate
+        T = 2 * np.pi / max(abs(model.lam.imag), 1e-9)
+        tt = np.linspace(0, T, 400)
+        r = integrate(lambda w: -model.G(w), np.array([z0]), tt, rtol=1e-10, margin=disk_margin,
+                      eps_levels=(1e-14,))
+        return {"t": tt, "z": r.y_out[:, 0], "code": B.IN_W, "code_name": code_name(B.IN_W),
+                "reason": "group of rotations: the backward orbit is periodic"}
+    if model.kind == "elliptic" and abs(z0 - model.tau) < 1e-12:
+        return {"t": np.array([0.0]), "z": np.array([z0]), "code": B.FIXED, "code_name": code_name(B.FIXED)}
+    pts = np.array([z0])
+    res = B.classify(chart, pts, parabolic_allowed=(model.kind == "parabolic"), record_path=True, rtol=1e-10)
+    lab = int(res["label"][0])
+    out = {"t": res["path_t"][0], "z": res["path_z"][0], "code": lab, "code_name": code_name(lab)}
+    if lab >= 0:
+        out["sigma"] = chart.sigmas[lab]
+        out["landing"] = chart.sigmas[lab]
+        out["beta_expected"] = chart.betas[lab]
+        if np.isfinite(res["beta_est"][0]):
+            out["beta_est"] = float(res["beta_est"][0])
+        out["reason"] = "enters the capture ball of σ, so it converges to σ"
+    elif lab == B.ESCAPE:
+        out["exit_time"] = float(res["exit_time"][0])
+        out["landing"] = complex(res["exit_point"][0])
+        out["reason"] = "reaches the unit circle in finite time"
+    elif lab == B.TAU:
+        out["landing"] = model.tau
+        out["reason"] = "runs to τ with Re w tending to a positive limit (parabolic petal)"
+    elif lab == B.UNDECIDED:
+        out["reason"] = f"still unclassified at t = {res['t_max']:.4g}"
     else:
-        for p in petals:
-            ap = _fmt_c(p["alpha_point"]) if p["alpha_point"] is not None else "undetermined"
-            summary.append(f"A {p['kind']} with α-point {ap}, covering about "
-                           f"{100 * p['area_fraction']:.1f}% of D.")
-    return {
-        "n": n, "T": T, "grid": g, "codes": code_grid, "exit_time": exit_grid,
-        "petal_labels": np.where(inside, labels, -1), "petals": petals, "counts": counts,
-        "code_names": CODES, "summary": summary,
-        "stalled": int(res.stalled.sum()),
-    }
+        out["reason"] = "numerical failure (step budget or step size)"
+    zz = out["z"]
+    with np.errstate(all="ignore"):
+        rho = np.abs(zz - z0) / np.abs(1 - np.conj(z0) * zz)
+    out["k_from_start"] = np.arctanh(np.clip(rho, 0, 1 - 1e-16))
+    return out

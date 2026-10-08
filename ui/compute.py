@@ -37,8 +37,8 @@ def dynamics(key: str, T: float | None):
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
-def backward(key: str, n: int, T: float):
-    return report.backward(_spec(key), n=n, T=T)
+def backward(key: str, n: int):
+    return report.backward(_spec(key), n=n)
 
 
 @st.cache_data(show_spinner=False, max_entries=32)

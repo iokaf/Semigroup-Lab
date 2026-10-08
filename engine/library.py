@@ -42,6 +42,17 @@ LIBRARY = [
                      "repelling": [{"sigma": [-1, 0], "beta": 1.125}]},
     },
     {
+        "slug": "elliptic-two-petals",
+        "name": "Elliptic, two petals",
+        "spec": {"mode": "bp", "tau": "0", "p": "(1-(exp(-I*pi/8)*z)^2)/(1+(exp(-I*pi/8)*z)^2)"},
+        "description": "Koenigs function h(z) = z/(1 - (e^{-i pi/8} z)^2). Two repelling points ±e^{i pi/8} "
+                       "(beta = 1); their petals are the two half-discs cut by the slanted diameter through "
+                       "±i e^{i pi/8}, where G has poles.",
+        "expected": {"kind": "elliptic", "group": False, "tau": [0, 0], "lambda": [1, 0],
+                     "repelling": [{"sigma": [0.9238795325112867, 0.3826834323650898], "beta": 1.0},
+                                   {"sigma": [-0.9238795325112867, -0.3826834323650898], "beta": 1.0}]},
+    },
+    {
         "slug": "lft-elliptic",
         "name": "Linear fractional elliptic (phi_t given)",
         "spec": {"mode": "semigroup", "phi": "exp(-t)*z/(1-(1-exp(-t))*z)"},

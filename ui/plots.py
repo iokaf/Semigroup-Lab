@@ -55,6 +55,69 @@ def _lines_trace(lines, color, width=1.3, dash=None, hover=None):
                       hoverinfo="skip" if hover is None else None, hovertemplate=hover)
 
 
+# ------------------------------------------------------------------ petals
+# Categorical colours for petals, in fixed order (validated: every pair separable, also with
+# colour-vision deficiencies). Beyond three petals identity also rests on the white borders drawn
+# between petals and on the hover labels, never on colour alone.
+PETAL_COLORS = ["#1baf7a", "#eb6834", "#4a3aa7", "#eda100", "#e34948", "#008300"]
+PARABOLIC_COLOR = "#e87ba4"
+GROUP_COLOR = "#9AAAE8"
+
+
+def petal_colors(bw):
+    """Colour per petal key, following the entity (the α-point), not its rank on screen."""
+    out, i = {}, 0
+    for p in bw.get("petals", []):
+        if not p.get("cells"):
+            continue
+        if p["key"] == "tau":
+            out["tau"] = PARABOLIC_COLOR
+        elif p["key"] == "W":
+            out["W"] = GROUP_COLOR
+        else:
+            out[p["key"]] = PETAL_COLORS[min(i, len(PETAL_COLORS) - 1)]
+            i += 1
+    return out
+
+
+def petal_name(p):
+    if p["key"] == "W":
+        return "W = D (group of rotations)"
+    if p["key"] == "tau":
+        return "parabolic petal (α-point τ)"
+    return f"petal of σ = {cnum(p['alpha_point'], 4)}"
+
+
+def sigma_color(sigma, bw, pcolor):
+    for p in (bw or {}).get("petals", []):
+        if p["key"] in pcolor and p.get("alpha_point") is not None and p["kind"] == "hyperbolic petal":
+            a = p["alpha_point"]
+            if abs(complex(a[0], a[1]) - complex(sigma[0], sigma[1])) < 1e-3:  # results are rounded for transport
+                return pcolor[p["key"]]
+    return C["teal"]
+
+
+def petal_borders(bw):
+    """Grid edges where two different petals meet (a surface-coloured gap between the fills)."""
+    lab = np.array(bw["labels"], dtype=float)
+    g = np.asarray(bw["grid"], dtype=float)
+    d = (g[1] - g[0]) / 2
+    is_petal = (lab >= 0) | (lab == -3)
+    xs, ys = [], []
+    # vertical edges between (i, j) and (i, j+1)
+    diff = (lab[:, :-1] != lab[:, 1:]) & is_petal[:, :-1] & is_petal[:, 1:]
+    for i, j in zip(*np.nonzero(diff)):
+        x = g[j] + d
+        xs += [x, x, None]
+        ys += [g[i] - d, g[i] + d, None]
+    diff = (lab[:-1, :] != lab[1:, :]) & is_petal[:-1, :] & is_petal[1:, :]
+    for i, j in zip(*np.nonzero(diff)):
+        y = g[i] + d
+        xs += [g[j] - d, g[j] + d, None]
+        ys += [y, y, None]
+    return xs, ys
+
+
 # ------------------------------------------------------------------ the disc
 def disc_figure(summary, dyn, bw, layers, frame=3, orbit=None, height=580):
     layers = set(layers or [])
@@ -70,13 +133,23 @@ def disc_figure(summary, dyn, bw, layers, frame=3, orbit=None, height=580):
             colorscale=[[0, "#FFF7E0"], [0.5, "#E8B341"], [1, "#7A4E00"]],
             hovertemplate="escape time 10^%{z:.2f}<extra></extra>",
             colorbar=dict(title=dict(text="log₁₀ T*", side="right"), thickness=10, len=0.55, x=1.0)))
-    if bw and "Petals" in layers and bw["petals"]:
-        kind_of = {p["label"]: (2 if p["kind"] == "parabolic petal" else 1) for p in bw["petals"]}
-        z = [[(kind_of.get(l) if (l is not None and l > 0) else None) for l in row] for row in bw["petal_labels"]]
-        fig.add_trace(go.Heatmap(
-            x=bw["grid"], y=bw["grid"], z=z, zmin=1, zmax=2, showscale=False, opacity=0.28,
-            colorscale=[[0, C["teal"]], [0.5, C["teal"]], [0.5, C["magenta"]], [1, C["magenta"]]],
-            hovertemplate="petal<extra></extra>"))
+    pcolor = petal_colors(bw) if bw else {}
+    if bw and "Petals" in layers and pcolor:
+        labels = bw["labels"]
+        for p in bw["petals"]:
+            key = p["key"]
+            if key not in pcolor:
+                continue
+            code = -3 if key == "tau" else (-5 if key == "W" else key)
+            z = [[(1 if l == code else None) for l in row] for row in labels]
+            name = petal_name(p)
+            fig.add_trace(go.Heatmap(
+                x=bw["grid"], y=bw["grid"], z=z, zmin=0, zmax=1, showscale=False, opacity=0.32,
+                colorscale=[[0, pcolor[key]], [1, pcolor[key]]], hovertemplate=f"{name}<extra></extra>"))
+        bx, by = petal_borders(bw)
+        if bx:
+            fig.add_trace(go.Scatter(x=bx, y=by, mode="lines", line=dict(color="#FFFFFF", width=1.6),
+                                     hoverinfo="skip"))
     if dyn and "Vector field" in layers:
         v = dyn["vector_field"]
         for xs, ys in ((v["shaft_x"], v["shaft_y"]), (v["head_x"], v["head_y"])):
@@ -99,9 +172,10 @@ def disc_figure(summary, dyn, bw, layers, frame=3, orbit=None, height=580):
         rep = [b for b in bps if b["kind"] == "repelling"]
         sup = [b for b in bps if b["kind"].startswith("super")]
         if rep:
+            colors = [sigma_color(b["sigma"], bw, pcolor) for b in rep]
             fig.add_trace(go.Scatter(
                 x=[b["sigma"][0] for b in rep], y=[b["sigma"][1] for b in rep], mode="markers",
-                marker=dict(symbol="triangle-up", size=12, color=C["teal"], line=dict(color="#fff", width=1)),
+                marker=dict(symbol="triangle-up", size=13, color=colors, line=dict(color=C["ink"], width=1)),
                 text=[f"repelling, β = {cnum(b['beta'], 6)}" for b in rep], hovertemplate="%{text}<extra></extra>"))
         if sup:
             fig.add_trace(go.Scatter(

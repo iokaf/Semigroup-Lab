@@ -80,32 +80,39 @@ def test_parabolic_koenigs_shapes(slug, shape):
 
 def test_koebe_petal_is_disc_minus_slit():
     m = SemigroupModel(by_slug("koebe-elliptic")["spec"])
-    r = petals.backward_map(m, m.summary()["boundary_points"], n=61, T=60)
-    assert len(r["petals"]) == 1
-    p = r["petals"][0]
+    r = petals.backward_map(m, m.summary()["boundary_points"], n=61)
+    real = [p for p in r["petals"] if p["cells"]]
+    assert len(real) == 1
+    p = real[0]
     assert p["kind"] == "hyperbolic petal" and abs(p["alpha_point"] - 1) < 1e-9
     assert abs(p["beta_estimate_median"] - 0.5) < 1e-2
-    g = r["grid"]
-    codes = r["codes"]
+    g, lab = r["grid"], r["labels"]
     row = np.argmin(np.abs(g))  # the real axis
-    neg = [codes[row, j] for j in range(len(g)) if -0.95 < g[j] < -0.05]
-    assert all(c == 0 for c in neg), "points of (-1, 0) must escape"
+    assert all(lab[row, j] == -1 for j in range(len(g)) if -0.999 < g[j] < -0.01), "points of (-1, 0) must escape"
+    y = np.repeat(g[:, None], len(g), axis=1)          # imaginary part of each grid point
+    off_axis = (lab != -9) & (np.abs(y) > 1e-9)
+    assert np.all(lab[off_axis] != -1), "every point off the slit has a backward orbit"
+    assert all(c["ok"] for c in r["checks"])
 
 
 def test_parabolic_petal_and_empty_W():
     m = SemigroupModel(by_slug("parabolic-positive-step")["spec"])
-    r = petals.backward_map(m, m.summary()["boundary_points"], n=61, T=60)
-    assert [p["kind"] for p in r["petals"]] == ["parabolic petal"]
+    r = petals.backward_map(m, m.summary()["boundary_points"], n=61, step_kind="positive")
+    assert [p["kind"] for p in r["petals"] if p["cells"]] == ["parabolic petal"]
+    assert all(c["ok"] for c in r["checks"])
     m = SemigroupModel(by_slug("parabolic-zero-step")["spec"])
-    r = petals.backward_map(m, m.summary()["boundary_points"], n=61, T=60)
-    assert r["petals"] == []
+    r = petals.backward_map(m, m.summary()["boundary_points"], n=61, step_kind="zero")
+    assert [p for p in r["petals"] if p["cells"]] == []
+    assert all(c["ok"] for c in r["checks"])
 
 
 def test_backward_orbit_of_point_in_petal():
     m = SemigroupModel(by_slug("hyperbolic-petal")["spec"])
-    b = orbits.backward_orbit(m, -0.3 + 0j, 60, m.summary()["boundary_points"])
-    assert b["code"] == 1 and abs(b["sigma"] + 1) < 1e-9
+    b = petals.backward_orbit(m, -0.3 + 0j, m.summary()["boundary_points"])
+    assert b["code"] == 0 and abs(b["sigma"] + 1) < 1e-9
     assert abs(b["beta_est"] - 2) < 0.05
+    e = petals.backward_orbit(m, 0.2 + 0.8j, m.summary()["boundary_points"])
+    assert e["code"] == -1 and abs(abs(e["landing"]) - 1) < 1e-9 and e["exit_time"] > 0
 
 
 @pytest.mark.parametrize("spec,msg", [

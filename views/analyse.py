@@ -17,7 +17,7 @@ DEFAULT_SLUG = "hyperbolic-petal"
 STATE_DEFAULTS = {
     "in_mode": "generator", "in_G": "(1-z^2)*(3-z)/4", "in_tau": "1", "in_p": "(1+z)/(1-z)",
     "in_phi": "exp(-t)*z/(1-(1-exp(-t))*z)",
-    "prm_Tvis": 0.0, "prm_bwn": 101, "prm_bwT": 60.0, "prm_asT": 0.0, "prm_z0": "0",
+    "prm_Tvis": 0.0, "prm_bwn": 101, "prm_asT": 0.0, "prm_z0": "0",
     "inspect": None, "last_sel": None, "insp_text": "",
 }
 KIND_COLOR = {"elliptic": "#0E8A6E", "hyperbolic": "#2747C7", "parabolic": "#C0266D"}
@@ -74,7 +74,7 @@ def _read_spec() -> dict:
 
 def _read_params() -> dict:
     ss = st.session_state
-    return {"T_vis": float(ss.prm_Tvis) or None, "bw_n": int(ss.prm_bwn), "bw_T": float(ss.prm_bwT),
+    return {"T_vis": float(ss.prm_Tvis) or None, "bw_n": int(ss.prm_bwn),
             "as_T": float(ss.prm_asT) or None, "z0": ss.prm_z0.strip() or "0"}
 
 
@@ -159,7 +159,6 @@ def sidebar():
                 st.number_input("Picture horizon T (0 = automatic)", min_value=0.0, max_value=500.0, step=1.0,
                                 key="prm_Tvis")
                 st.number_input("Backward map resolution", min_value=21, max_value=201, step=10, key="prm_bwn")
-                st.number_input("Backward horizon", min_value=1.0, max_value=1000.0, step=10.0, key="prm_bwT")
                 st.number_input("Asymptotics horizon (0 = automatic)", min_value=0.0, max_value=1e6, step=10.0,
                                 key="prm_asT")
                 st.text_input("Base point z₀ for asymptotics", key="prm_z0")
@@ -311,16 +310,15 @@ def render_inspector(key, orbit, err):
     if fwd.get("k_to_tau"):
         rows.append(("k_D(φₜ(z₀), τ)", num(fwd["k_to_tau"][-1], 4)))
     rows.append(("Backward orbit", b["code_name"]))
-    if b.get("reason") and b["code"] not in (1, 2):
+    if b.get("reason"):
         rows.append(("", b["reason"]))
     if b.get("exit_time") is not None:
         rows.append(("Escape time T*", num(b["exit_time"], 6)))
     if b.get("landing"):
-        rows.append(("Hits ∂D at" if b["code"] == 0 else "Converges to", cnum(b["landing"], 6, 1e-7)))
+        rows.append(("Hits ∂D at" if b["code"] == -1 else "Converges to", cnum(b["landing"], 6, 1e-7)))
     if b.get("beta_est"):
-        rows.append(("Rate (β estimate)", num(b["beta_est"], 5)))
-    if b.get("beta_fit_from_log_margin"):
-        rows.append(("Rate from log(1−|z|)", num(b["beta_fit_from_log_margin"], 5)))
+        exp = f" (β(σ) = {num(b['beta_expected'], 5)})" if b.get("beta_expected") else ""
+        rows.append(("Rate into σ", num(b["beta_est"], 5) + exp))
     body = "".join(f"<dt>{html.escape(k)}</dt><dd>{html.escape(v)}</dd>" for k, v in rows)
     st.markdown(f'<dl class="insp">{body}</dl>', unsafe_allow_html=True)
     compat.plotly_chart(plots.inspector_figure(orbit), config=plots.CONFIG,
@@ -421,15 +419,26 @@ def tab_boundary(s, bw, err):
         return
     if not bw:
         return
-    st.markdown(" ".join(bw["summary"]) + f" Computed on a {bw['n']}×{bw['n']} grid with backward horizon "
-                f"T = {num(bw['T'], 4)}.")
-    if bw["petals"]:
-        lines = ["| Petal | α-point | Area (share of D) | β from backward orbits |", "|---|---|---|---|"]
-        for p in bw["petals"]:
-            lines.append(f"| {p['kind']} | {cnum(p['alpha_point'], 6) if p.get('alpha_point') else '—'} | "
+    st.markdown(" ".join(bw["summary"]))
+    st.caption(f"Grid of {bw['n']}×{bw['n']} points reaching the unit circle; every backward orbit is followed until it "
+               f"escapes or provably converges (longest time needed: {num(bw['t_max'], 4)}, in the flow's own time). "
+               f"Areas are shares of the grid cells in D.")
+    real = [p for p in bw["petals"] if p.get("cells")]
+    if real:
+        colors = plots.petal_colors(bw)
+        lines = ["| Petal | α-point | Area (share of D) | Rate of backward orbits into σ | β(σ) |", "|---|---|---|---|---|"]
+        for p in real:
+            swatch = f'<span style="color:{colors.get(p["key"], "#999")}">■</span> '
+            lines.append(f"| {swatch}{p['kind']} | {cnum(p['alpha_point'], 6) if p.get('alpha_point') else '—'} | "
                          f"{num(100 * p['area_fraction'], 3)}% | "
-                         f"{num(p['beta_estimate_median'], 5) if p.get('beta_estimate_median') else '—'} |")
-        st.markdown("\n".join(lines))
+                         f"{num(p['beta_estimate_median'], 5) if p.get('beta_estimate_median') else '—'} | "
+                         f"{num(p['beta'], 6) if p.get('beta') else '—'} |")
+        st.markdown("\n".join(lines), unsafe_allow_html=True)
+    if bw.get("checks"):
+        st.markdown(f"**Checks against the theory** {how('backward', 'Which theorems?')}", unsafe_allow_html=True)
+        for c in bw["checks"]:
+            mark = ":green[**✓**]" if c["ok"] else ":orange[**⚠**]"
+            st.markdown(f"{mark} {md_escape_cell(c['text'])}")
     counts = [(k, v) for k, v in bw["counts"].items() if v]
     st.markdown("| Backward behaviour of grid points | Count |\n|---|---|\n"
                 + "\n".join(f"| {k} | {v} |" for k, v in counts))
@@ -449,9 +458,10 @@ def tab_details(s, asym, kg, bw, spec):
     if kg:
         items.append(("Koenigs function", kg["method"], "koenigs"))
     items.append(("Backward invariant set",
-                  "Each grid point is integrated backwards (dz/ds = −G). Reaching the circle in finite time means the "
-                  "point is not in φₜ(D) for large t; an asymptotic approach to a boundary fixed point puts it in a "
-                  "petal. Survivors up to T are undecided, so the result is an outer approximation.", "backward"))
+                  "Each grid point's backward orbit is followed (in the half-plane chart for non-elliptic semigroups) "
+                  "until it reaches the circle (not in W) or enters a ball around a repelling point inside which "
+                  "convergence is guaranteed (petal of that point). Parabolic petal: Re w tends to a positive limit. "
+                  "Petals are grouped by α-point and checked against the theory.", "backward"))
     items.append(("Reliability", "; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in s["tiers"].items()) + ".",
                   "reliability"))
     for title, text, anchor in items:
@@ -460,6 +470,7 @@ def tab_details(s, asym, kg, bw, spec):
     export = {"input": spec, "summary": s,
               "asymptotics": {k: (asym or {}).get(k) for k in ("kind", "z0", "T", "fits", "step_numeric", "slope_tail")},
               "petals": (bw or {}).get("petals"), "backward_counts": (bw or {}).get("counts"),
+              "petal_checks": (bw or {}).get("checks"),
               "koenigs_geometry": {k: v for k, v in ((kg or {}).get("geometry") or {}).items()
                                    if k in ("shape", "text", "width", "lambda_from_width", "note")}}
     compat.download_button("Download the results (JSON)", data=json.dumps(export, indent=2),
@@ -500,7 +511,7 @@ def main():
     with left:
         with st.spinner("Computing flow lines and the backward map…"):
             dyn, dyn_err = compute.run(compute.dynamics, key, params["T_vis"])
-            bw, bw_err = compute.run(compute.backward, key, params["bw_n"], params["bw_T"])
+            bw, bw_err = compute.run(compute.backward, key, params["bw_n"])
         for e in (dyn_err, bw_err):
             if e:
                 st.warning(e)
